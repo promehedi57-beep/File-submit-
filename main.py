@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+import os
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -76,6 +77,7 @@ HTML_PAGE = """
                     resultBox.innerText = data.data;
                     resultBox.style.display = 'block';
                     resultBox.style.borderLeftColor = '#00ffcc';
+                    resultBox.style.color = '#00ffcc';
                 } else {
                     resultBox.innerText = "❌ Error: " + data.detail;
                     resultBox.style.display = 'block';
@@ -84,8 +86,10 @@ HTML_PAGE = """
                 }
             } catch (err) {
                 loader.style.display = 'none';
-                resultBox.innerText = "❌ Connection Failed!";
+                resultBox.innerText = "❌ Connection Failed! Server might be down.";
                 resultBox.style.display = 'block';
+                resultBox.style.borderLeftColor = '#ff4d4d';
+                resultBox.style.color = '#ff4d4d';
             }
         }
     </script>
@@ -108,49 +112,40 @@ async def get_ui():
 @app.post("/generate")
 async def generate_token(data: UserData):
     async with async_playwright() as p:
-        # ব্রাউজারকে আসল মানুষের মতো দেখানোর জন্য Stealth Arguments
         browser_args = [
             "--disable-blink-features=AutomationControlled",
             "--disable-infobars",
             "--no-sandbox",
-            "--disable-setuid-sandbox"
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage"
         ]
         
-        # প্রক্সি সেটআপ (যদি ইউজার প্রক্সি দেয়)
         proxy_settings = None
-        if data.proxy:
-            proxy_settings = {"server": data.proxy}
+        if data.proxy and data.proxy.strip():
+            proxy_settings = {"server": data.proxy.strip()}
 
         try:
-            # Headless True রেখেই অ্যান্টি-বট বাইপাসের চেষ্টা
             browser = await p.chromium.launch(
                 headless=True,
                 args=browser_args,
                 proxy=proxy_settings
             )
             
-            # রিয়েল ডিভাইসের User-Agent ব্যবহার করা
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 720}
             )
             
-            # মাইক্রোসফট যেন বুঝতে না পারে যে এটি বট, তাই কিছু জাভাস্ক্রিপ্ট ইনজেক্ট করা
             await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
             page = await context.new_page()
 
             await page.goto("https://login.live.com/")
             await page.fill('input[name="loginfmt"]', data.email)
             await page.click('input[type="submit"]')
-            
-            # মানুষের মতো রিয়েলিস্টিক ডিলে (Delay) দেওয়া
             await page.wait_for_timeout(3000) 
             
             await page.fill('input[name="passwd"]', data.password)
             await page.click('input[type="submit"]')
-            
-            # সফল লগইন যাচাই
             await page.wait_for_url("**/mail/**", timeout=20000)
             
             cookies = await context.cookies()
@@ -167,3 +162,12 @@ async def generate_token(data: UserData):
             if 'browser' in locals():
                 await browser.close()
             return {"status": "error", "detail": "সিকিউরিটি ব্লক করেছে বা প্রক্সি কাজ করছে না।"}
+
+# ==========================================
+# 3. সার্ভার রানার (Render এর জন্য অত্যন্ত জরুরি)
+# ==========================================
+if __name__ == "__main__":
+    import uvicorn
+    # Render অটোমেটিকভাবে পোর্ট অ্যাসাইন করে, তাই OS থেকে পোর্ট নেওয়া হচ্ছে
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
